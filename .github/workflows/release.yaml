@@ -316,6 +316,21 @@ jobs:
       with:
         name: musl-1.2.3-platform-aarch64-apple-darwin-target-aarch64-linux-musl.tar.gz
         path: .
+    - name: Generate MODULE.bazel
+      run: "touch MODULE.bazel\n\ncat >MODULE.bazel <<EOF\nmodule(\n    name = \"\
+        musl-toolchain\",\n    version = \"${{github.ref_name}}\",\n)\n\nbazel_dep(name\
+        \ = \"bazel_features\", version = \"1.9.0\")\n\nmusl_toolchains = use_extension(\"\
+        //:musl_toolchains.bzl\", \"musl_toolchains\")\nuse_repo(musl_toolchains,\
+        \ \"musl_toolchains_hub\")\n\nregister_toolchains(\"@musl_toolchains_hub//:all\"\
+        )\nEOF\n"
+    - name: Generate extensions.bzl
+      run: "touch musl_toolchains.bzl\n\ncat >musl_toolchains.bzl <<EOF\nload(\"@bazel_features//:features.bzl\"\
+        , \"bazel_features\")\nload(\":repositories.bzl\", \"load_musl_toolchains\"\
+        )\n\ndef _musl_toolchains(module_ctx):\n    load_musl_toolchains()\n\n   \
+        \ if bazel_features.external_deps.extension_metadata_has_reproducible:\n \
+        \       return module_ctx.extension_metadata(reproducible = True)\n    else:\n\
+        \        return None\n\nmusl_toolchains = module_extension(_musl_toolchains)\n\
+        EOF\n"
     - name: Generate toolchains.bzl
       run: "touch BUILD.bazel\n\ncat >toolchains.bzl <<EOF\ndef register_musl_toolchains():\n\
         \    native.register_toolchains(\"@musl_toolchains_hub//:all\")\nEOF\n"
@@ -390,9 +405,30 @@ jobs:
         ,\n        extra_exec_compatible_with = extra_exec_compatible_with,\n    \
         \    extra_target_compatible_with = extra_target_compatible_with,\n    )\n\
         EOF\n"
+    - name: Generate bcr_test/MODULE.bazel
+      run: "mkdir -p bcr_test\ntouch bcr_test/MODULE.bazel\n\ncat >bcr_test/MODULE.bazel\
+        \ <<EOF\nbazel_dep(name = \"musl-toolchain\")\nlocal_path_override(\n    name\
+        \ = \"musl-toolchain\",\n    path = \"..\",\n)\n\nbazel_dep(name = \"platforms\"\
+        , version = \"0.0.10\")\nEOF\n"
+    - name: Generate bcr_test/BUILD.bazel
+      run: "mkdir -p bcr_test\ntouch bcr_test/BUILD.bazel\n\ncat >bcr_test/BUILD.bazel\
+        \ <<EOF\nload(\"@platforms//experimental/platform_data:defs.bzl\", \"platform_data\"\
+        )\n\ngenrule(\n    name = \"generate_source\",\n    outs = [\"main.cc\"],\n\
+        \    cmd = \"\"\"cat >$@ <<EOF\n#include <stdio.h>\n\nint main(void) {\n \
+        \ printf(\"Built on $$(uname) $$(uname -m)\\n\");\n  return 0;\n}\nEOF\n\"\
+        \"\",\n)\n\ncc_binary(\n    name = \"binary\",\n    srcs = [\"main.cc\"],\n\
+        \    linkopts = [\"-static\"],\n)\n\nplatform_data(\n    name = \"binary_linux_x86_64\"\
+        ,\n    target = \":binary\",\n    platform = \":linux_x86_64\",\n)\n\nplatform_data(\n\
+        \    name = \"binary_linux_aarch64\",\n    target = \":binary\",\n    platform\
+        \ = \":linux_aarch64\",\n)\n\nplatform(\n    name = \"linux_x86_64\",\n  \
+        \  constraint_values = [\n        \"@platforms//cpu:x86_64\",\n        \"\
+        @platforms//os:linux\",\n    ],\n)\n\nplatform(\n    name = \"linux_aarch64\"\
+        ,\n    constraint_values = [\n        \"@platforms//cpu:aarch64\",\n     \
+        \   \"@platforms//os:linux\",\n    ],\n)\nEOF\n"
     - name: Generate release archive
-      run: ./deterministic-tar.sh musl_toolchain-${{github.ref_name}}.tar.gz toolchains.bzl
-        repositories.bzl BUILD.bazel
+      run: ./deterministic-tar.sh musl_toolchain-${{github.ref_name}}.tar.gz MODULE.bazel
+        musl_toolchains.bzl toolchains.bzl repositories.bzl BUILD.bazel bcr_test/MODULE.bazel
+        bcr_test/BUILD.bazel
     - name: Generate release body
       run: sha256=$(sha256sum musl_toolchain-${{github.ref_name}}.tar.gz | awk '{print
         $1}') ; url='https://github.com/bazel-contrib/musl-toolchain/releases/download/${{github.ref_name}}/musl_toolchain-${{github.ref_name}}.tar.gz'

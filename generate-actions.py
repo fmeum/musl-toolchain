@@ -325,6 +325,45 @@ def generate_release_archive(toolchain_infos, output_path, version):
     )
     return [
         {
+            "name": "Generate MODULE.bazel",
+            "run": f"""touch MODULE.bazel
+
+cat >MODULE.bazel <<EOF
+module(
+    name = "musl-toolchain",
+    version = "{version}",
+)
+
+bazel_dep(name = "bazel_features", version = "1.9.0")
+
+musl_toolchains = use_extension("//:musl_toolchains.bzl", "musl_toolchains")
+use_repo(musl_toolchains, "musl_toolchains_hub")
+
+register_toolchains("@musl_toolchains_hub//:all")
+EOF
+""",
+        },
+        {
+            "name": "Generate extensions.bzl",
+            "run": f"""touch musl_toolchains.bzl
+
+cat >musl_toolchains.bzl <<EOF
+load("@bazel_features//:features.bzl", "bazel_features")
+load(":repositories.bzl", "load_musl_toolchains")
+
+def _musl_toolchains(module_ctx):
+    load_musl_toolchains()
+
+    if bazel_features.external_deps.extension_metadata_has_reproducible:
+        return module_ctx.extension_metadata(reproducible = True)
+    else:
+        return None
+
+musl_toolchains = module_extension(_musl_toolchains)
+EOF
+""",
+        },
+        {
             "name": "Generate toolchains.bzl",
             "run": f"""touch BUILD.bazel
 
@@ -365,8 +404,82 @@ EOF
 """,
         },
         {
+            "name": "Generate bcr_test/MODULE.bazel",
+            "run": f"""mkdir -p bcr_test
+touch bcr_test/MODULE.bazel
+
+cat >bcr_test/MODULE.bazel <<EOF
+bazel_dep(name = "musl-toolchain")
+local_path_override(
+    name = "musl-toolchain",
+    path = "..",
+)
+
+bazel_dep(name = "platforms", version = "0.0.10")
+EOF
+""",
+        },
+        {
+            "name": "Generate bcr_test/BUILD.bazel",
+            "run": '''mkdir -p bcr_test
+touch bcr_test/BUILD.bazel
+
+cat >bcr_test/BUILD.bazel <<EOF
+load("@platforms//experimental/platform_data:defs.bzl", "platform_data")
+
+genrule(
+    name = "generate_source",
+    outs = ["main.cc"],
+    cmd = """cat >$@ <<EOF
+#include <stdio.h>
+
+int main(void) {
+  printf("Built on $$(uname) $$(uname -m)\\n");
+  return 0;
+}
+EOF
+""",
+)
+
+cc_binary(
+    name = "binary",
+    srcs = ["main.cc"],
+    linkopts = ["-static"],
+)
+
+platform_data(
+    name = "binary_linux_x86_64",
+    target = ":binary",
+    platform = ":linux_x86_64",
+)
+
+platform_data(
+    name = "binary_linux_aarch64",
+    target = ":binary",
+    platform = ":linux_aarch64",
+)
+
+platform(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+)
+
+platform(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+)
+EOF
+''',
+        },
+        {
             "name": "Generate release archive",
-            "run": f"./deterministic-tar.sh {output_path} toolchains.bzl repositories.bzl BUILD.bazel",
+            "run": f"./deterministic-tar.sh {output_path} MODULE.bazel musl_toolchains.bzl toolchains.bzl repositories.bzl BUILD.bazel bcr_test/MODULE.bazel bcr_test/BUILD.bazel",
         },
     ]
 
